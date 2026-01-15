@@ -6,9 +6,9 @@ const BUTTON_SELECTOR = 'button, [role="button"], a, input[type="button"], input
 
 const TEXT_PATTERNS = {
   orderTickets: [/order\s+tickets?/i, /get\s+tickets?/i, /buy\s+tickets?/i],
-  buyAdditional: [/buy\s+additional/i, /add\s+tickets?/i, /add\s+another/i],
+  buyAdditional: [/buy\s+additional\s+tickets/i, /buy\s+additional/i, /add\s+tickets?/i, /add\s+another/i],
   continue: [/add\s+to\s+cart/i, /continue/i, /next/i, /checkout/i, /proceed/i, /review/i],
-  final: [/complete\s+purchase/i, /place\s+order/i, /confirm\s+purchase/i, /pay\s+now/i, /submit\s+order/i, /buy\s+now/i]
+  final: [/complete\s+purchase/i, /place\s+order/i, /confirm\s+purchase/i, /pay\s+now/i, /submit\s+order/i, /buy\s+now/i, /finish/i]
 };
 
 function normalizeTitle(title) {
@@ -73,9 +73,9 @@ async function waitForPageSettled(page, waitMs = 1500) {
   await page.waitForTimeout(waitMs);
 }
 
-async function clickFirstMatching(page, patterns, label) {
+async function clickFirstMatching(context, patterns, label, quiet = false) {
   for (const pattern of patterns) {
-    const locator = page.locator(BUTTON_SELECTOR, { hasText: pattern });
+    const locator = context.locator(BUTTON_SELECTOR, { hasText: pattern });
     const count = await locator.count().catch(() => 0);
     for (let i = 0; i < Math.min(count, 6); i++) {
       const target = locator.nth(i);
@@ -86,24 +86,106 @@ async function clickFirstMatching(page, patterns, label) {
       const text = (await target.innerText().catch(() => '')).trim();
       if (text && /sold\s*out/i.test(text)) continue;
       await target.click({ timeout: 5000 });
-      console.log(`   ✓ ${label || 'Clicked'}${text ? `: "${text}"` : ''}`);
+      if (!quiet) {
+        console.log(`   ✓ ${label || 'Clicked'}${text ? `: "${text}"` : ''}`);
+      }
       return true;
     }
   }
   return false;
 }
 
+async function clickFirstMatchingAnyContext(page, patterns, label, options = {}) {
+  const waitMs = options.waitMs || 0;
+  const deadline = Date.now() + waitMs;
+  const contexts = () => [page, ...page.frames().filter(f => f !== page.mainFrame())];
+
+  while (true) {
+    for (const context of contexts()) {
+      if (await clickFirstMatching(context, patterns, label, waitMs > 0)) {
+        if (waitMs > 0) {
+          console.log(`   ✓ ${label || 'Clicked'} (after wait)`);
+        }
+        return true;
+      }
+    }
+    if (Date.now() >= deadline) break;
+    await page.waitForTimeout(500);
+  }
+  return false;
+}
+
+// Click element by searching all text content (for divs, spans, etc.)
+async function clickByTextContent(page, searchText, label) {
+  const clicked = await page.evaluate((search) => {
+    const searchLower = search.toLowerCase();
+    const allElements = document.querySelectorAll('*');
+
+    for (const el of allElements) {
+      const text = (el.innerText || el.textContent || '').toLowerCase();
+      // Check if this element directly contains the text (not just a parent)
+      const directText = Array.from(el.childNodes)
+        .filter(n => n.nodeType === Node.TEXT_NODE)
+        .map(n => n.textContent)
+        .join('')
+        .toLowerCase();
+
+      if (directText.includes(searchLower) || (text.includes(searchLower) && el.children.length === 0)) {
+        // Find clickable ancestor or use the element itself
+        const clickable = el.closest('a, button, [role="button"], [onclick]') || el;
+        if (clickable.offsetParent !== null) {
+          clickable.click();
+          return { clicked: true, text: (clickable.innerText || '').trim().substring(0, 50) };
+        }
+      }
+    }
+    return { clicked: false };
+  }, searchText);
+
+  if (clicked.clicked) {
+    console.log(`   ✓ ${label || 'Clicked'}: "${clicked.text}"`);
+    return true;
+  }
+  return false;
+}
+
+async function dumpVisibleButtons(page, label = 'Buttons') {
+  const items = await page.evaluate(() => {
+    const buttons = Array.from(document.querySelectorAll('button, [role="button"], a, input[type="button"], input[type="submit"]'));
+    return buttons
+      .map(btn => {
+        const text = (btn.innerText || btn.value || '').trim();
+        return text;
+      })
+      .filter(Boolean)
+      .slice(0, 20);
+  });
+  if (items.length > 0) {
+    console.log(`   🔎 ${label}: ${items.join(' | ')}`);
+  }
+}
+
 async function checkTermsCheckboxes(page) {
-  return await page.evaluate(() => {
-    const patterns = [/agree/i, /terms/i, /conditions/i, /policy/i];
+  const checked = await page.evaluate(() => {
+    // Look for checkboxes related to terms/purchasing
+    const patterns = [/agree/i, /terms/i, /conditions/i, /policy/i, /purchasing/i];
     const boxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
     let checkedAny = false;
 
     boxes.forEach((box) => {
       if (box.disabled) return;
+
+      // Check the label, parent text, or nearby text
       const label = box.closest('label') || (box.id ? document.querySelector(`label[for="${box.id}"]`) : null);
-      const labelText = (label?.innerText || box.getAttribute('aria-label') || '').toLowerCase();
-      if (patterns.some(p => p.test(labelText))) {
+      const parent = box.parentElement;
+      const textSources = [
+        label?.innerText,
+        box.getAttribute('aria-label'),
+        parent?.innerText,
+        parent?.textContent
+      ].filter(Boolean).join(' ').toLowerCase();
+
+      if (patterns.some(p => p.test(textSources))) {
         if (!box.checked) {
           box.click();
           checkedAny = true;
@@ -113,6 +195,11 @@ async function checkTermsCheckboxes(page) {
 
     return checkedAny;
   });
+
+  if (checked) {
+    console.log('   ✓ Checked terms/agreement checkbox');
+  }
+  return checked;
 }
 
 async function setTicketQuantity(page, quantity) {
@@ -288,19 +375,53 @@ async function detectConfirmation(page) {
 }
 
 async function detectBlockingError(page) {
-  const errorText = await page.locator('text=/sold out|no longer available|payment failed|declined|try again/i')
-    .first()
-    .isVisible()
-    .catch(() => false);
-  return errorText;
+  // Only check for errors within modals/dialogs, not the background page
+  const errorInModal = await page.evaluate(() => {
+    // Look for modal/dialog containers
+    const modal = document.querySelector('[role="dialog"], .modal, [class*="modal"], [class*="checkout"], [class*="Checkout"]');
+    if (!modal) return false;
+
+    const modalText = modal.innerText.toLowerCase();
+    const errorPatterns = ['no longer available', 'payment failed', 'declined', 'try again', 'error'];
+    return errorPatterns.some(p => modalText.includes(p));
+  });
+  return errorInModal;
 }
 
 async function runCheckoutFlow(page, settings, helpers) {
   const maxSteps = settings.maxSteps || 12;
   const stepWaitMs = settings.stepWaitMs || 1800;
+  const waitForBuyAdditionalMs = settings.waitForBuyAdditionalMs || 15000;
   const payment = getPaymentConfig(settings);
 
+  // Step 1: Click "Buy additional tickets..." - it's often a DIV, not a button
+  console.log('   Looking for "Buy additional tickets..." dropdown...');
+  await page.waitForTimeout(1500); // Wait for dropdown to appear
+
+  // Try text content search first (handles DIV elements)
+  let clickedBuyAdditional = await clickByTextContent(page, 'buy additional tickets', 'Buy additional tickets');
+
+  // Fallback to button patterns if text search didn't work
+  if (!clickedBuyAdditional) {
+    clickedBuyAdditional = await clickFirstMatchingAnyContext(page, TEXT_PATTERNS.buyAdditional, 'Buy additional tickets', {
+      waitMs: waitForBuyAdditionalMs
+    });
+  }
+
+  if (clickedBuyAdditional) {
+    await waitForPageSettled(page, stepWaitMs);
+    console.log('   Checkout modal should be open...');
+  } else {
+    console.log('   ⚠️ Could not find "Buy additional tickets..." - may already be in checkout');
+  }
+
+  // Main checkout loop - simplified for Sundance flow:
+  // 1. Check terms checkbox
+  // 2. Click "COMPLETE PURCHASE"
   for (let step = 1; step <= maxSteps; step++) {
+    console.log(`   Checkout step ${step}...`);
+
+    // Safety checks
     if (await detectQueue(page)) {
       return { success: false, reason: 'Queue/waiting room encountered', url: page.url() };
     }
@@ -311,38 +432,39 @@ async function runCheckoutFlow(page, settings, helpers) {
       return { success: true, reason: 'Purchase confirmed', url: page.url() };
     }
     if (await detectBlockingError(page)) {
-      return { success: false, reason: 'Checkout error or sold out', url: page.url() };
+      return { success: false, reason: 'Checkout error in modal', url: page.url() };
     }
 
     let acted = false;
 
-    // Some flows require "Buy additional tickets" before quantity selection
-    acted = acted || await clickFirstMatching(page, TEXT_PATTERNS.buyAdditional, 'Buy additional tickets');
-
-    // Quantity
-    acted = acted || await setTicketQuantity(page, settings.ticketQuantity);
-
-    // Terms checkbox
+    // Step A: Check the terms checkbox ("I agree to the Purchasing Terms")
     acted = acted || await checkTermsCheckboxes(page);
 
-    // Payment selection / entry
-    acted = acted || await selectSavedPayment(page);
-    acted = acted || await fillCardDetails(page, payment);
-
-    // Final confirmation
-    if (await clickFirstMatching(page, TEXT_PATTERNS.final, 'Complete purchase')) {
-      await waitForPageSettled(page, stepWaitMs);
+    // Step B: Try to click "COMPLETE PURCHASE" button
+    if (await clickFirstMatchingAnyContext(page, TEXT_PATTERNS.final, 'Complete purchase')) {
+      await waitForPageSettled(page, stepWaitMs + 1000); // Extra wait for purchase processing
       if (await detectConfirmation(page)) {
         return { success: true, reason: 'Purchase confirmed', url: page.url() };
       }
       acted = true;
     }
 
-    // Continue through flow
-    acted = acted || await clickFirstMatching(page, TEXT_PATTERNS.continue, 'Continue');
+    // Fallback: Try quantity adjustment if needed
+    acted = acted || await setTicketQuantity(page, settings.ticketQuantity);
+
+    // Fallback: Try saved payment selection
+    acted = acted || await selectSavedPayment(page);
+
+    // Fallback: Try continue/next buttons
+    acted = acted || await clickFirstMatchingAnyContext(page, TEXT_PATTERNS.continue, 'Continue');
 
     if (!acted) {
-      break;
+      if (settings.debugScreenshots || settings.debugButtonDump) {
+        await dumpVisibleButtons(page, `Step ${step} - no action taken`);
+      }
+      // Wait a bit and try one more time in case page is still loading
+      await page.waitForTimeout(1500);
+      continue;
     }
 
     await waitForPageSettled(page, stepWaitMs);

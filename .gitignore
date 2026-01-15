@@ -8,8 +8,7 @@ auto-purchase.json
 
 # Generated files
 ticket-state.json
-test-screenshot.png
-checkout-*.png
+*.png
 
 # Logs
 *.log
