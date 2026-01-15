@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "films": [
+    {
+      "title": "The Last First: Winter K2",
+      "autoPurchase": false
+    },
+    {
+      "title": "Buddy",
+      "autoPurchase": false
+    }
+  ],
+  "settings": {
+    "ticketQuantity": 1,
+    "notifyOnPurchaseUpdates": true,
+    "debugScreenshots": false
+  }
+}

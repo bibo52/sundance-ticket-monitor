@@ -1,0 +1,14 @@
+# fly.toml app configuration file
+# See https://fly.io/docs/reference/configuration/ for information
+
+app = "sundance-ticket-monitor"
+primary_region = "ord"
+
+[build]
+
+[env]
+  CHECK_INTERVAL = "60000"
+
+[mounts]
+  source = "sundance_data"
+  destination = "/app/data"

@@ -1,0 +1,20 @@
+[
+  {
+    "name": "session_id",
+    "value": "your_session_value_here",
+    "domain": ".sundance.org",
+    "path": "/",
+    "secure": true,
+    "httpOnly": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "auth_token",
+    "value": "your_auth_token_here",
+    "domain": ".sundance.org",
+    "path": "/",
+    "secure": true,
+    "httpOnly": true,
+    "sameSite": "Lax"
+  }
+]

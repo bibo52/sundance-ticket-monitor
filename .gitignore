@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Sensitive data - NEVER COMMIT THESE
+cookies.json
+.env
+auto-purchase.json
+
+# Generated files
+ticket-state.json
+test-screenshot.png
+checkout-*.png
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Debug files
+debug-notes.md
